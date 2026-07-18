@@ -662,6 +662,25 @@ def match_footnotes(all_refs, all_contents, refs_by_page, contents_by_page, patt
 
 # ── Convert mode: HTML generation ───────────────────────────
 
+def _classify_toc_line(line):
+    """Classify a TOC line as 'toc-part', 'toc-section', or 'toc-chapter'.
+    Works for both Chinese and English books."""
+    # Chinese Part headers: 第一部分, 第二部分, ...
+    if re.match(r'第[一二三四五六七八九十百]+部分', line):
+        return 'toc-part'
+    # English Part headers: Part I, Part II, PART ONE, ...
+    if re.match(r'(Part|PART)\s+([IVX]+|\w+)', line):
+        return 'toc-part'
+    # Chinese section headers: 后记, 参考文献, 附录, ...
+    if re.match(r'(后记|後記|参考文献|參考文獻|附录|附錄|索引)\b', line):
+        return 'toc-section'
+    # English section headers
+    if re.match(r'(Epilogue|Afterword|Bibliography|References|Appendix|Index)\b', line, re.IGNORECASE):
+        return 'toc-section'
+    # Default: chapter entry
+    return 'toc-chapter'
+
+
 def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
                image_map, img_placement, cover_img_name, title, author,
                skip_pages, css, footnote_config):
@@ -746,8 +765,13 @@ def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
         ch_id = "ch%d" % (ch_idx + 1)
         parts.append('<h1 id="%s">%s</h1>' % (ch_id, html.escape(ch_name)))
         
-        # ── TOC chapter detection ──
-        is_toc_chapter = '目录' in ch_name or '目錄' in ch_name
+        # ── TOC chapter detection (language-agnostic) ──
+        toc_keywords = ['目录', '目錄', 'Contents', 'Table of Contents', '目次']
+        is_toc_chapter = any(kw in ch_name for kw in toc_keywords)
+        
+        # Fallback: content-based detection — if chapter has many short
+        # lines matching chapter-number patterns, treat it as TOC
+        _toc_content_check_done = False
         
         # Separate chapter footnote accumulators per type
         chapter_fns = {pid: [] for pid in [t["id"] for t in ftypes]}
@@ -850,29 +874,37 @@ def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
                         if is_toc_chapter:
                             clean_toc = re.sub(r'<[^>]+>', '', pt).strip()
                             lines = [l.strip() for l in clean_toc.split('\n') if l.strip()]
-                            if len(lines) >= 2 and any(
-                                re.match(r'第[一二三四五六七八九十百]+章', l) for l in lines
-                            ):
+                            # Detect if this paragraph looks like multi-line TOC content
+                            _has_cn_chapter = any(re.match(r'第[一二三四五六七八九十百]+章', l) for l in lines)
+                            _has_en_chapter = any(re.match(r'\d+\.\s+\w', l) for l in lines)
+                            if len(lines) >= 2 and (_has_cn_chapter or _has_en_chapter):
                                 # Multi-line TOC block → split and tag each line
                                 for line in lines:
-                                    if re.match(r'第[一二三四五六七八九十百]+部分', line):
-                                        parts.append('<p class="toc-part">%s</p>' % html.escape(line))
-                                    elif re.match(r'(后记|後記|参考文献|參考文獻|附录|附錄)\b', line):
-                                        parts.append('<p class="toc-section">%s</p>' % html.escape(line))
-                                    elif re.match(r'第[一二三四五六七八九十百]+章', line):
-                                        parts.append('<p class="toc-chapter">%s</p>' % html.escape(line))
-                                    else:
-                                        parts.append('<p class="toc-chapter">%s</p>' % html.escape(line))
+                                    cls = _classify_toc_line(line)
+                                    parts.append('<p class="%s">%s</p>' % (cls, html.escape(line)))
                             else:
                                 # Single-line TOC entry
-                                if re.match(r'第[一二三四五六七八九十百]+部分', clean_toc):
-                                    parts.append('<p class="toc-part">%s</p>' % pt)
-                                elif re.match(r'(后记|後記|参考文献|參考文獻|附录|附錄)\b', clean_toc):
-                                    parts.append('<p class="toc-section">%s</p>' % pt)
-                                else:
-                                    parts.append('<p class="toc-chapter">%s</p>' % pt)
+                                cls = _classify_toc_line(clean_toc)
+                                parts.append('<p class="%s">%s</p>' % (cls, pt))
                         else:
-                            parts.append('<p>%s</p>' % pt)
+                            # ── Content-based TOC fallback ──
+                            # Even if chapter name doesn't match TOC keywords,
+                            # check if paragraph looks like TOC content
+                            clean_fb = re.sub(r'<[^>]+>', '', pt).strip()
+                            fb_lines = [l.strip() for l in clean_fb.split('\n') if l.strip()]
+                            if len(fb_lines) >= 5:
+                                _cn = sum(1 for l in fb_lines if re.match(r'第[一二三四五六七八九十百]+章', l))
+                                _en = sum(1 for l in fb_lines if re.match(r'\d+\.\s+\w', l))
+                                _toc_ratio = (_cn + _en) / len(fb_lines)
+                                if _toc_ratio >= 0.5:
+                                    # Looks like undetected TOC → apply formatting
+                                    for line in fb_lines:
+                                        cls = _classify_toc_line(line)
+                                        parts.append('<p class="%s">%s</p>' % (cls, html.escape(line)))
+                                else:
+                                    parts.append('<p>%s</p>' % pt)
+                            else:
+                                parts.append('<p>%s</p>' % pt)
                 
                 elif t == "image":
                     bbox = b.get("bbox", [])
