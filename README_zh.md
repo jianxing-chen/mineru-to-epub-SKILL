@@ -1,5 +1,7 @@
 # Mineru → EPUB
 
+[English](./README.md)
+
 将 Mineru 处理后的 PDF 转换为 Kindle 可读的 EPUB，支持弹窗脚注、章节导航和内嵌图片。
 
 ## 解决什么问题
