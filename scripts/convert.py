@@ -55,6 +55,11 @@ aside a { text-decoration: none; color: #555; }
 .title-page h1 { font-size: 1.8em; page-break-before: avoid; margin-bottom: 0.5em; }
 .title-page .subtitle { font-size: 1em; color: #555; }
 .title-page .author { font-size: 1.1em; margin-top: 2em; }
+.toc-part   { text-indent: 0; font-weight: bold; font-size: 1.05em;
+              margin: 1.2em 0 0.4em 0; text-align: left; }
+.toc-chapter { text-indent: 1.5em; margin: 0.15em 0; }
+.toc-section  { text-indent: 0; font-weight: bold;
+                margin: 0.8em 0 0.3em 0; }
 '''
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -741,6 +746,9 @@ def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
         ch_id = "ch%d" % (ch_idx + 1)
         parts.append('<h1 id="%s">%s</h1>' % (ch_id, html.escape(ch_name)))
         
+        # ── TOC chapter detection ──
+        is_toc_chapter = '目录' in ch_name or '目錄' in ch_name
+        
         # Separate chapter footnote accumulators per type
         chapter_fns = {pid: [] for pid in [t["id"] for t in ftypes]}
         first_para_skipped = False
@@ -838,7 +846,33 @@ def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
                             short = ch_name.split()[-1] if ' ' in ch_name else ch_name
                             if clean == ch_name or clean == short:
                                 continue
-                        parts.append('<p>%s</p>' % pt)
+                        # ── TOC formatting: split multi-line TOC blocks ──
+                        if is_toc_chapter:
+                            clean_toc = re.sub(r'<[^>]+>', '', pt).strip()
+                            lines = [l.strip() for l in clean_toc.split('\n') if l.strip()]
+                            if len(lines) >= 2 and any(
+                                re.match(r'第[一二三四五六七八九十百]+章', l) for l in lines
+                            ):
+                                # Multi-line TOC block → split and tag each line
+                                for line in lines:
+                                    if re.match(r'第[一二三四五六七八九十百]+部分', line):
+                                        parts.append('<p class="toc-part">%s</p>' % html.escape(line))
+                                    elif re.match(r'(后记|後記|参考文献|參考文獻|附录|附錄)\b', line):
+                                        parts.append('<p class="toc-section">%s</p>' % html.escape(line))
+                                    elif re.match(r'第[一二三四五六七八九十百]+章', line):
+                                        parts.append('<p class="toc-chapter">%s</p>' % html.escape(line))
+                                    else:
+                                        parts.append('<p class="toc-chapter">%s</p>' % html.escape(line))
+                            else:
+                                # Single-line TOC entry
+                                if re.match(r'第[一二三四五六七八九十百]+部分', clean_toc):
+                                    parts.append('<p class="toc-part">%s</p>' % pt)
+                                elif re.match(r'(后记|後記|参考文献|參考文獻|附录|附錄)\b', clean_toc):
+                                    parts.append('<p class="toc-section">%s</p>' % pt)
+                                else:
+                                    parts.append('<p class="toc-chapter">%s</p>' % pt)
+                        else:
+                            parts.append('<p>%s</p>' % pt)
                 
                 elif t == "image":
                     bbox = b.get("bbox", [])
