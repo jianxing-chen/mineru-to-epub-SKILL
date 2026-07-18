@@ -1,5 +1,7 @@
 # Mineru → EPUB
 
+[中文说明](./README_zh.md)
+
 Convert Mineru-processed PDFs into Kindle-ready EPUBs with popup footnotes, chapter navigation, and embedded images.
 
 ## What it does
