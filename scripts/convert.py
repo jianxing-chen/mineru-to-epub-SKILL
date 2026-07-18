@@ -887,24 +887,10 @@ def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
                                 cls = _classify_toc_line(clean_toc)
                                 parts.append('<p class="%s">%s</p>' % (cls, pt))
                         else:
-                            # ── Content-based TOC fallback ──
-                            # Even if chapter name doesn't match TOC keywords,
-                            # check if paragraph looks like TOC content
-                            clean_fb = re.sub(r'<[^>]+>', '', pt).strip()
-                            fb_lines = [l.strip() for l in clean_fb.split('\n') if l.strip()]
-                            if len(fb_lines) >= 5:
-                                _cn = sum(1 for l in fb_lines if re.match(r'第[一二三四五六七八九十百]+章', l))
-                                _en = sum(1 for l in fb_lines if re.match(r'\d+\.\s+\w', l))
-                                _toc_ratio = (_cn + _en) / len(fb_lines)
-                                if _toc_ratio >= 0.5:
-                                    # Looks like undetected TOC → apply formatting
-                                    for line in fb_lines:
-                                        cls = _classify_toc_line(line)
-                                        parts.append('<p class="%s">%s</p>' % (cls, html.escape(line)))
-                                else:
-                                    parts.append('<p>%s</p>' % pt)
-                            else:
-                                parts.append('<p>%s</p>' % pt)
+                            # Not a TOC chapter → render as normal paragraph.
+                            # (If a TOC went undetected, write a project-specific
+                            #  post-processing script to fix the EPUB.)
+                            parts.append('<p>%s</p>' % pt)
                 
                 elif t == "image":
                     bbox = b.get("bbox", [])
