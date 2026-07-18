@@ -758,9 +758,11 @@ def build_html(all_pages, all_refs, all_contents, matched, chapter_ranges,
                     text = "".join(it.get("content", "") for it in b.get("content", {}).get(ck, [])
                                    if isinstance(it, dict))
                     clean = text.strip()
-                    if clean and clean != ch_name and "CIP" not in clean:
-                        short = ch_name.split()[-1] if ' ' in ch_name else ch_name
-                        if clean != short and short not in clean:
+                    if clean and "CIP" not in clean:
+                        # Skip if this title duplicates the chapter name
+                        ch_norm = re.sub(r'\s+', '', ch_name)
+                        t_norm = re.sub(r'\s+', '', clean)
+                        if not (t_norm == ch_norm or (len(t_norm) >= 2 and t_norm in ch_norm)):
                             tag = "h2" if b.get("content", {}).get("level", 1) <= 1 else "h3"
                             parts.append('<%s>%s</%s>' % (tag, html.escape(clean), tag))
                 

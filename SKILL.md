@@ -215,18 +215,120 @@ Agent 根据判定结果生成配置。**每个 pattern 必须包含以下字段
 
 ### 2.5 生成 chapter_config.json
 
-Agent 同时需生成章节配置（与 v1 格式兼容）。Profile 输出中不包含章节信息——Agent 需通过阅读 full.md 或 title blocks 来构建：
+Agent 同时需生成章节配置。Profile 输出中不包含章节信息，Agent 必须系统地扫描 Mineru 输出来构建。**注意：Mineru 的 `title` 类型仅覆盖 `#`/`##` 级别的标题，而目录、部分标题、后记等常以 `paragraph` 或 `page_header` 形式存在，极易遗漏。**
+
+#### 2.5.1 扫描方法（按优先级）
+
+**方法一（首选）：从 `*_content_list_v2.json` 扫描**
+
+这是最精确的方法，因为能直接获取每页每项的类型和文本：
+
+```python
+import json, os
+
+# 对每个 part 目录：
+for f in os.listdir(part_dir):
+    if f.endswith("_content_list_v2.json"):
+        with open(os.path.join(part_dir, f)) as fh:
+            data = json.load(fh)  # list[page], 每页是 list[item]
+
+for page_idx, page_items in enumerate(data):
+    book_page = part_offset + page_idx  # part_offset 是 PDF 页码起点
+    for item in page_items:
+        t = item.get("type")      # "title" / "paragraph" / "page_header" / "page_footer"
+        content = item.get("content", {})
+        # 提取文本...
+```
+
+**方法二（辅助）：阅读 `full.md`**
+
+仅用于交叉验证，不用于发现结构元素——因为 full.md 无页码标记且忽略了 item 类型。
+
+#### 2.5.2 目录（TOC）的发现
+
+中文书籍的目录几乎总是位于**前言和第一章之间**的 1-3 页内，且有以下特征：
+- Mineru type 为 `paragraph`（非 `title`！）
+- 连续多行短文本，每行包含 "第一章"/"第二章"… 或 "章……XX" 模式
+- 通常包含页码数字（如 "第一章 丧失的创伤……002"）
+
+**扫描策略：**
+1. 先找到 `前言` 和 `第一章` 的 PDF 页码（通过扫描 title blocks）
+2. 扫描这两页之间的所有 `paragraph` 文本
+3. 如果连续 N 行匹配章节名+页码模式且 N ≥ 3 → 确认找到目录
+4. 将目录本身作为一条 `{"name": "目录", "page": <起始页>}` 加入 chapters
+
+**关键：目录还是书名页？** 目录页通常以 "目录" 字样开头（单独一行），书名页通常是竖排或居中大字。如果 Mineru 未能识别 "目录" 二字，通过内容模式判断：含 "第一章……XX" 格式的页 = 目录页。
+
+#### 2.5.3 部分（Part）标题的发现
+
+学术书籍常分多个"部分"（第一部分/第二部分… 或 Part I/Part II…）。这些标题：
+- Mineru type 通常为 `paragraph`（极少是 `title`）
+- 独占一页或半页，文字简短（如 "第二部分" + "成人的哀悼"）
+- 位于目录指示的章节边界前
+
+**扫描策略：**
+1. 从目录内容中提取部分标记（如 "第一部分 | 观察，概念，争论"）
+2. 在每个部分的第一章之前 1-2 页扫描 `paragraph` 文本
+3. 匹配到 "第X部分" 或 "Part X" 后，将整行作为 `{"name": "第X部分 …", "page": <页码>}` 加入
+
+#### 2.5.4 后记/附录/其他非标题结构元素
+
+- **后记 / 后记 / Afterword / Epilogue**：常作为 `page_header` 出现在正文末尾、参考文献之前。扫描最后几章的 `page_header` 内容。
+- **附录 / Appendix**：在目录中有体现，扫描对应页码的 `title` 或 `paragraph`。
+- **参考文献 / Bibliography**：通常是最后一章，`title` 类型，较易识别。
+
+#### 2.5.5 目录作为章节标题的权威来源
+
+**关键原则：目录中的标题是权威的。** Mineru 的 title block 可能因 PDF 排版问题遗漏副标题或截断标题。一旦发现目录，Agent 必须：
+
+1. 从目录中解析出完整的章节列表和对应页码（注意：目录页码是**印刷页码**，非 PDF 页码，仅用于排序验证）
+2. 将 Mineru 检测到的 title 与目录进行交叉比对：
+   - 标题不一致 → 以目录为准
+   - 目录有但 Mineru 未检测到 → 补充
+   - Mineru 检测到但目录没有 → 可能是误检（如页眉、章节内子标题）
+
+#### 2.5.6 页码映射
+
+- **PDF 页码** = `part_offset + page_idx`（0-indexed），用于 `chapter_config.json`
+- **印刷页码**（目录中出现的数字）仅用于验证排序，不写入 config
+- `skip_pages` 用于跳过 CIP 数据、空白页等前置页面
+
+#### 2.5.7 章节配置模板
 
 ```json
 {
   "chapters": [
     {"name": "封面", "page": 1, "is_cover": true},
-    {"name": "前言", "page": 4},
-    {"name": "第一章 观点", "page": 28}
+    {"name": "中文版序一", "page": 4},
+    {"name": "前言", "page": 19},
+    {"name": "目录", "page": 23},
+    {"name": "第一部分 观察，概念，争论", "page": 25},
+    {"name": "第一章 丧失的创伤", "page": 26},
+    ...
+    {"name": "后记", "page": 481},
+    {"name": "参考文献", "page": 483}
   ],
   "skip_pages": [2, 3]
 }
 ```
+
+**注意事项：**
+- 封面必须设置 `"is_cover": true`
+- 章节必须按 PDF 页码升序排列
+- `skip_pages` 列出应跳过的 PDF 页码（如前几页的 CIP/版权信息）
+- 如果全书无 Part 划分、无目录、无后记，则省略对应条目
+
+#### 2.5.8 生成后自检清单
+
+Agent 在写出 chapter_config.json 后，必须逐项确认：
+
+- [ ] 目录已识别且加入（如果原书有目录）
+- [ ] 部分标题（第一部分/第二部分…）已加入（如果目录中有体现）
+- [ ] 所有章节标题已与目录交叉比对，不一致的已修正
+- [ ] 后记/附录已扫描并加入（如果原书有）
+- [ ] 参考文献已加入
+- [ ] 所有 `page` 值为 PDF 页码（非印刷页码）
+- [ ] 章节按页码升序排列，无跳页或重复
 
 ---
 
@@ -282,6 +384,28 @@ python3 convert.py --convert \
 - **Cross-page footnotes**: a ref near the page bottom may have its body on the next page
 - **Multi-number blocks**: Mineru sometimes concatenates several footnote bodies into one text item (e.g., `"85 同上… 86 Fabian Society…"`) — set `multi_number_split: true` for digit patterns
 - **Broken paragraphs**: Mineru may split a paragraph across two pages, leaving a sentence tail orphaned on the next page. The script auto-detects and merges these: if paragraph A ends mid-sentence (no 。！？) and paragraph B starts as a continuation (short tail fragment, or starts mid-sentence), they are merged into one `<p>`.
+
+### Mineru Item Types 与章节结构的关系
+
+⚠️ **关键认知：Mineru 用 `type` 字段标注每项内容的性质，但不同类型的"地位"不对等：**
+
+| Mineru type | 典型内容 | 是否一定是结构元素？ |
+|-------------|----------|---------------------|
+| `title` | `#` / `##` 级标题 | ✅ 通常是章节标题 |
+| `paragraph` | 正文段落 | ⚠️ **目录、部分标题、书名页也可能是 paragraph！** |
+| `page_header` | 页眉 | ⚠️ **后记、部分标题可能是 page_header！** |
+| `page_footer` | 页脚 | 页码或出版社名，可忽略 |
+| `page_footnote` | 页末脚注正文 | 用于 footnote 匹配 |
+| `page_number` | 页码数字 | 可忽略 |
+| `equation_interline` | 行间公式 | 可忽略 |
+| `table` | 表格 | 可忽略 |
+
+**为什么目录和部分标题会被 Mineru 标识为 `paragraph`？**
+- PDF 排版中，目录和部分标题通常不使用标准标题样式（无大纲级别标记）
+- Mineru 的标题识别依赖 PDF 的大纲/书签结构，而非视觉排版
+- 结果：目录、部分标题页、后记等在视觉上是"结构页"，但在 Mineru 输出中是"普通段落"
+
+**因此，Agent 构建 chapter_config.json 时绝不能仅扫描 `title` 类型的项，必须同时扫描 `paragraph` 和 `page_header` 来发现目录、部分标题、后记等隐藏的结构元素。详见 §2.5。**
 
 ## match_footnotes 算法说明
 
